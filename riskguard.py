@@ -18,8 +18,8 @@ if not API_KEY or not API_SECRET:
 # تنظیمات ربات
 MAX_LOSS_USD = 1.0          
 REWARD_RATIO = 5.0          
-TRIGGER_RATIO = 3.0         
-LOCK_PROFIT_RATIO = 1.0     
+TRIGGER_RATIO = 4.0         
+LOCK_PROFIT_RATIO = 3.0     
 MAX_RUN_TIME_SECONDS = 5 * 3600 + 50 * 60
 CHECK_INTERVAL_SECONDS = 20                 
 ONLY_ONE_TRADE = True
