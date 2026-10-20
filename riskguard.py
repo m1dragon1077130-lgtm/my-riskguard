@@ -1,3 +1,9 @@
+"""
+RiskGuard — ربات مدیریت ریسک (نسخه پیشرفته و اصلاح‌شده)
+- خواندن هوشمندانه سود شناور (PnL, Pnl, pnl)
+- دقت ۸ رقم اعشار برای ارزهای ارزان مثل پپه
+"""
+
 import os
 import sys
 import json
@@ -15,11 +21,11 @@ if not API_KEY or not API_SECRET:
     print("❌ خطا: TT_API_KEY یا TT_API_SECRET در Secrets گیت‌هاب تنظیم نشده.")
     sys.exit(1)
 
-# تنظیمات ربات
+# تنظیمات ثابت ربات
 MAX_LOSS_USD = 1.0          
 REWARD_RATIO = 5.0          
-TRIGGER_RATIO = 4.0         
-LOCK_PROFIT_RATIO = 3.0     
+TRIGGER_RATIO = 3.0         
+LOCK_PROFIT_RATIO = 1.0     
 MAX_RUN_TIME_SECONDS = 5 * 3600 + 50 * 60
 CHECK_INTERVAL_SECONDS = 20                 
 ONLY_ONE_TRADE = True
@@ -98,22 +104,33 @@ def run_riskguard_cycle(state):
         size = float(p.get("size", 0))
         current_sl = p.get("stopLoss")
         current_tp = p.get("takeProfit")
-        unrealized_pnl = float(p.get("unrealizedPnL", 0) or p.get("pnl", 0) or 0)
+        
+        # 🌟 خواندن هوشمندانه سود شناور با تمام حالت‌های ممکن
+        unrealized_pnl = float(
+            p.get("unrealizedPnL") or 
+            p.get("unrealizedPnl") or 
+            p.get("unrealizedpnl") or 
+            p.get("pnl") or 
+            p.get("PnL") or 
+            0
+        )
 
         if size <= 0: continue
 
+        # 🌟 محاسبه دقیق فاصله‌ها (بدون گرد کردن زودهنگام)
         sl_distance = MAX_LOSS_USD / size
         tp_distance = (MAX_LOSS_USD * REWARD_RATIO) / size
         lock_profit_distance = (MAX_LOSS_USD * LOCK_PROFIT_RATIO) / size
 
+        # 🌟 گرد کردن به ۸ رقم اعشار (حیاتی برای پپه و ارزهای ارزان)
         if side == "LONG":
-            target_sl = round(entry_price - sl_distance, 4)
-            target_tp = round(entry_price + tp_distance, 4)
-            profit_sl_price = round(entry_price + lock_profit_distance, 4)
+            target_sl = round(entry_price - sl_distance, 8)
+            target_tp = round(entry_price + tp_distance, 8)
+            profit_sl_price = round(entry_price + lock_profit_distance, 8)
         else:
-            target_sl = round(entry_price + sl_distance, 4)
-            target_tp = round(entry_price - tp_distance, 4)
-            profit_sl_price = round(entry_price - lock_profit_distance, 4)
+            target_sl = round(entry_price + sl_distance, 8)
+            target_tp = round(entry_price - tp_distance, 8)
+            profit_sl_price = round(entry_price - lock_profit_distance, 8)
 
         key = pid
         needs_update = False
@@ -137,11 +154,14 @@ def run_riskguard_cycle(state):
             elif LOCK_STOP_LOSS:
                 current_sl_f = float(current_sl)
                 saved_sl_f = float(state[key]["sl"])
-                risk_increased = (side == "LONG" and current_sl_f < saved_sl_f - 1e-6) or (side == "SHORT" and current_sl_f > saved_sl_f + 1e-6)
+                
+                # 🌟 استفاده از دقت بالاتر (1e-10) برای مقایسه در ارزهای ارزان
+                risk_increased = (side == "LONG" and current_sl_f < saved_sl_f - 1e-10) or (side == "SHORT" and current_sl_f > saved_sl_f + 1e-10)
+                
                 if risk_increased:
                     payload["stopLoss"] = str(saved_sl_f)
                     needs_update = True
-                elif abs(current_sl_f - saved_sl_f) > 1e-6:
+                elif abs(current_sl_f - saved_sl_f) > 1e-10:
                     state[key]["sl"] = current_sl_f
 
         target_tp_f = float(state[key]["tp"])
@@ -150,7 +170,8 @@ def run_riskguard_cycle(state):
             needs_update = True
         else:
             current_tp_f = float(current_tp)
-            too_far = (current_tp_f > target_tp_f + 1e-6) if side == "LONG" else (current_tp_f < target_tp_f - 1e-6)
+            # 🌟 استفاده از دقت بالاتر (1e-10) برای مقایسه TP
+            too_far = (current_tp_f > target_tp_f + 1e-10) if side == "LONG" else (current_tp_f < target_tp_f - 1e-10)
             if too_far:
                 payload["takeProfit"] = str(target_tp_f)
                 needs_update = True
