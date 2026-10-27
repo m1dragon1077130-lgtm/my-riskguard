@@ -1,7 +1,9 @@
 """
-RiskGuard — ربات مدیریت ریسک (نسخه پیشرفته و اصلاح‌شده)
-- خواندن هوشمندانه سود شناور (PnL, Pnl, pnl)
-- دقت ۸ رقم اعشار برای ارزهای ارزان مثل پپه
+RiskGuard — ربات مدیریت ریسک (نسخه پیشرفته + حد ضرر فاجعه‌بار)
+- تنظیمات اختصاصی شما (ریوارد ۱۰، قفل سود ۳)
+- خواندن هوشمندانه PnL
+- دقت ۸ رقم اعشار برای ارزهای ارزان
+- بستن اضطراری در صورت ضرر ۱.۵ برابری
 """
 
 import os
@@ -21,11 +23,14 @@ if not API_KEY or not API_SECRET:
     print("❌ خطا: TT_API_KEY یا TT_API_SECRET در Secrets گیت‌هاب تنظیم نشده.")
     sys.exit(1)
 
-# تنظیمات ثابت ربات
+# ==========================================
+# تنظیمات ثابت ربات (مطابق کد خودت)
+# ==========================================
 MAX_LOSS_USD = 1.0          
 REWARD_RATIO = 10.0          
 TRIGGER_RATIO = 4.0         
 LOCK_PROFIT_RATIO = 3.0     
+CATASTROPHIC_MULTIPLIER = 1.5 # 🚨 بستن اضطراری در ۱.۵ برابر حد ضرر
 MAX_RUN_TIME_SECONDS = 5 * 3600 + 50 * 60
 CHECK_INTERVAL_SECONDS = 20                 
 ONLY_ONE_TRADE = True
@@ -104,8 +109,9 @@ def run_riskguard_cycle(state):
         size = float(p.get("size", 0))
         current_sl = p.get("stopLoss")
         current_tp = p.get("takeProfit")
+        mark_price = float(p.get("markPrice", entry_price)) # 🌟 قیمت فعلی برای محاسبه فاجعه
         
-        # 🌟 خواندن هوشمندانه سود شناور با تمام حالت‌های ممکن
+        # 🌟 خواندن هوشمندانه سود شناور
         unrealized_pnl = float(
             p.get("unrealizedPnL") or 
             p.get("unrealizedPnl") or 
@@ -117,12 +123,29 @@ def run_riskguard_cycle(state):
 
         if size <= 0: continue
 
-        # 🌟 محاسبه دقیق فاصله‌ها (بدون گرد کردن زودهنگام)
+        # ==========================================
+        # 🚨 قانون حد ضرر فاجعه‌بار (Catastrophic Stop)
+        # ==========================================
+        sl_distance_price = MAX_LOSS_USD / size
+        
+        if side == "LONG":
+            current_distance = entry_price - mark_price
+        else:
+            current_distance = mark_price - entry_price
+            
+        if current_distance > (sl_distance_price * CATASTROPHIC_MULTIPLIER):
+            print(f"🚨 هشدار فاجعه: فاصله قیمت {symbol} از حد مجاز ({CATASTROPHIC_MULTIPLIER} برابر) بیشتر شد. بستن فوری!")
+            request("POST", f"{FUTURES_PREFIX}/positions/{pid}/close", {"orderType": "MARKET"})
+            continue
+
+        # ==========================================
+        # 🌟 محاسبه دقیق فاصله‌ها
+        # ==========================================
         sl_distance = MAX_LOSS_USD / size
         tp_distance = (MAX_LOSS_USD * REWARD_RATIO) / size
         lock_profit_distance = (MAX_LOSS_USD * LOCK_PROFIT_RATIO) / size
 
-        # 🌟 گرد کردن به ۸ رقم اعشار (حیاتی برای پپه و ارزهای ارزان)
+        # 🌟 گرد کردن به ۸ رقم اعشار
         if side == "LONG":
             target_sl = round(entry_price - sl_distance, 8)
             target_tp = round(entry_price + tp_distance, 8)
@@ -155,7 +178,7 @@ def run_riskguard_cycle(state):
                 current_sl_f = float(current_sl)
                 saved_sl_f = float(state[key]["sl"])
                 
-                # 🌟 استفاده از دقت بالاتر (1e-10) برای مقایسه در ارزهای ارزان
+                # 🌟 دقت بالاتر (1e-10)
                 risk_increased = (side == "LONG" and current_sl_f < saved_sl_f - 1e-10) or (side == "SHORT" and current_sl_f > saved_sl_f + 1e-10)
                 
                 if risk_increased:
@@ -170,7 +193,6 @@ def run_riskguard_cycle(state):
             needs_update = True
         else:
             current_tp_f = float(current_tp)
-            # 🌟 استفاده از دقت بالاتر (1e-10) برای مقایسه TP
             too_far = (current_tp_f > target_tp_f + 1e-10) if side == "LONG" else (current_tp_f < target_tp_f - 1e-10)
             if too_far:
                 payload["takeProfit"] = str(target_tp_f)
