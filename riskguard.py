@@ -1,9 +1,10 @@
 """
-RiskGuard — ربات مدیریت ریسک (نسخه پیشرفته + حد ضرر فاجعه‌بار)
-- تنظیمات اختصاصی شما (ریوارد ۱۰، قفل سود ۳)
+RiskGuard — ربات مدیریت ریسک (نسخه پیشرفته + حد ضرر فاجعه‌بار + قانون ۳ ضرر متوالی)
+- تنظیمات اختصاصی شما (ریوارد ۶، قفل سود ۳)
 - خواندن هوشمندانه PnL
 - دقت ۸ رقم اعشار برای ارزهای ارزان
 - بستن اضطراری در صورت ضرر ۱.۵ برابری
+- 🚨 قانون جدید: توقف کامل پس از ۳ ضرر متوالی در یک روز
 """
 
 import os
@@ -14,6 +15,7 @@ import hmac
 import hashlib
 import urllib.request
 import urllib.error
+from datetime import datetime, timezone
 
 # خواندن کلیدها از Secrets گیت‌هاب (امن)
 API_KEY = os.environ.get("TT_API_KEY")
@@ -30,11 +32,14 @@ MAX_LOSS_USD = 1.0
 REWARD_RATIO = 6.0          
 TRIGGER_RATIO = 4.0         
 LOCK_PROFIT_RATIO = 3.0     
-CATASTROPHIC_MULTIPLIER = 1.5 # 🚨 بستن اضطراری در ۱.۵ برابر حد ضرر
+CATASTROPHIC_MULTIPLIER = 1.5 
 MAX_RUN_TIME_SECONDS = 5 * 3600 + 50 * 60
 CHECK_INTERVAL_SECONDS = 20                 
 ONLY_ONE_TRADE = True
 LOCK_STOP_LOSS = True
+
+# 🚨 قانون جدید
+MAX_CONSECUTIVE_LOSSES = 3  # حداکثر ۳ ضرر متوالی در یک روز
 
 BASE_URL = "https://apiv2.thetruetrade.io"
 FUTURES_PREFIX = "/futures"
@@ -83,7 +88,47 @@ def save_state(state):
         with open(STATE_FILE, "w") as f: json.dump(state, f, indent=2)
     except Exception as e: print(f"خطا در ذخیره state: {e}")
 
+# 🚨 تابع جدید برای بررسی ۳ ضرر متوالی امروز
+def check_consecutive_losses():
+    today = datetime.now(timezone.utc).date()
+    response = request("GET", f"{FUTURES_PREFIX}/positions")
+    if not response: return False
+        
+    items = response.get("items", []) if isinstance(response, dict) else response
+    # فیلتر معاملات بسته شده
+    closed = [p for p in items if p.get("status") == "CLOSED"]
+    
+    # مرتب‌سازی از جدید به قدیم
+    closed.sort(key=lambda x: x.get("updatedAt", x.get("createdAt", "")), reverse=True)
+    
+    consecutive_losses = 0
+    for p in closed:
+        closed_at = p.get("updatedAt", "")
+        if not closed_at: break
+        try:
+            dt = datetime.fromisoformat(closed_at.replace("Z", "+00:00"))
+            # اگر معامله مربوط به امروز نبود، زنجیره شکسته میشه
+            if dt.date() != today:
+                break
+                
+            pnl = float(p.get("realizedPnL", 0) or p.get("totalPnL", 0) or 0)
+            if pnl < 0:
+                consecutive_losses += 1
+            else:
+                # اگر به یه معامله سودده برسیم، زنجیره شکسته میشه
+                break
+        except:
+            pass
+            
+    if consecutive_losses >= MAX_CONSECUTIVE_LOSSES:
+        print(f"🚨 هشدار: {consecutive_losses} ضرر متوالی در امروز شناسایی شد. تا فردا معامله ممنوع است!")
+        return True
+    return False
+
 def run_riskguard_cycle(state):
+    # 🚨 چک کردن قانون ۳ ضرر متوالی
+    is_trading_halted = check_consecutive_losses()
+    
     response = request("GET", f"{FUTURES_PREFIX}/positions")
     if response is None: return
 
@@ -91,6 +136,13 @@ def run_riskguard_cycle(state):
     open_positions = [p for p in positions if isinstance(p, dict) and p.get("status") == "OPENED" and p.get("isActive")]
 
     if not open_positions: return
+
+    # اگر قانون نقض شده بود، هر معامله بازی رو ببند
+    if is_trading_halted:
+        for p in open_positions:
+            print(f"🚨 بستن اجباری معامله {p['symbol']} به دلیل قانون ۳ ضرر متوالی.")
+            request("POST", f"{FUTURES_PREFIX}/positions/{p['id']}/close", {"orderType": "MARKET"})
+        return # خروج از چرخه
 
     if ONLY_ONE_TRADE and len(open_positions) > 1:
         open_positions.sort(key=lambda p: (p.get("createdAt", ""), p.get("id")))
@@ -109,9 +161,8 @@ def run_riskguard_cycle(state):
         size = float(p.get("size", 0))
         current_sl = p.get("stopLoss")
         current_tp = p.get("takeProfit")
-        mark_price = float(p.get("markPrice", entry_price)) # 🌟 قیمت فعلی برای محاسبه فاجعه
+        mark_price = float(p.get("markPrice", entry_price)) 
         
-        # 🌟 خواندن هوشمندانه سود شناور
         unrealized_pnl = float(
             p.get("unrealizedPnL") or 
             p.get("unrealizedPnl") or 
@@ -123,9 +174,6 @@ def run_riskguard_cycle(state):
 
         if size <= 0: continue
 
-        # ==========================================
-        # 🚨 قانون حد ضرر فاجعه‌بار (Catastrophic Stop)
-        # ==========================================
         sl_distance_price = MAX_LOSS_USD / size
         
         if side == "LONG":
@@ -138,14 +186,10 @@ def run_riskguard_cycle(state):
             request("POST", f"{FUTURES_PREFIX}/positions/{pid}/close", {"orderType": "MARKET"})
             continue
 
-        # ==========================================
-        # 🌟 محاسبه دقیق فاصله‌ها
-        # ==========================================
         sl_distance = MAX_LOSS_USD / size
         tp_distance = (MAX_LOSS_USD * REWARD_RATIO) / size
         lock_profit_distance = (MAX_LOSS_USD * LOCK_PROFIT_RATIO) / size
 
-        # 🌟 گرد کردن به ۸ رقم اعشار
         if side == "LONG":
             target_sl = round(entry_price - sl_distance, 8)
             target_tp = round(entry_price + tp_distance, 8)
@@ -178,7 +222,6 @@ def run_riskguard_cycle(state):
                 current_sl_f = float(current_sl)
                 saved_sl_f = float(state[key]["sl"])
                 
-                # 🌟 دقت بالاتر (1e-10)
                 risk_increased = (side == "LONG" and current_sl_f < saved_sl_f - 1e-10) or (side == "SHORT" and current_sl_f > saved_sl_f + 1e-10)
                 
                 if risk_increased:
