@@ -28,7 +28,7 @@ if not API_KEY or not API_SECRET:
 # ==========================================
 # تنظیمات ثابت ربات (مطابق کد خودت)
 # ==========================================
-MAX_LOSS_USD = 1.0          
+MAX_LOSS_USD = 2.0          
 REWARD_RATIO = 6.0          
 TRIGGER_RATIO = 4.0         
 LOCK_PROFIT_RATIO = 3.0     
