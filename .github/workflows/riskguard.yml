@@ -1,9 +1,14 @@
 name: My RiskGuard Bot
+
 on:
   workflow_dispatch:
   schedule:
-    # 🌟 هر ۶ ساعت و ۱ دقیقه اجرا می‌شود (۰۰:۰۱، ۰۶:۰۱، ۱۲:۰۱، ۱۸:۰۱)
-    - cron: '1 */6 * * *' 
+    - cron: '1 */6 * * *'
+
+# 🌟 این بخش جدید: جلوگیری از اجرای همزمان دو چرخه
+concurrency:
+  group: riskguard-bot
+  cancel-in-progress: false
 
 jobs:
   run:
