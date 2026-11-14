@@ -1,14 +1,21 @@
-"name: My RiskGuard Bot
+name: My RiskGuard Bot
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '1 */6 * * *'
+    - cron: '*/15 * * * *'
+
+permissions:
+  actions: write
+
+concurrency:
+  group: riskguard-bot
+  cancel-in-progress: false
 
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 355
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -18,4 +25,12 @@ jobs:
         env:
           TT_API_KEY: ${{ secrets.TT_API_KEY }}
           TT_API_SECRET: ${{ secrets.TT_API_SECRET }}
-        run: python riskguard.py"
+        run: python riskguard.py
+      - name: Trigger next run
+        if: always()
+        run: |
+          curl -s -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${{ github.repository }}/actions/workflows/riskguard.yml/dispatches \
+            -d '{"ref":"main"}'
