@@ -1,4 +1,4 @@
-name: My RiskGuard Bot
+"name: My RiskGuard Bot
 
 on:
   workflow_dispatch:
@@ -18,4 +18,4 @@ jobs:
         env:
           TT_API_KEY: ${{ secrets.TT_API_KEY }}
           TT_API_SECRET: ${{ secrets.TT_API_SECRET }}
-        run: python riskguard.py
+        run: python riskguard.py"
