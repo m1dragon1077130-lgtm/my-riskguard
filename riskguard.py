@@ -39,7 +39,7 @@ ONLY_ONE_TRADE = True
 LOCK_STOP_LOSS = True
 
 # 🚨 قانون جدید
-MAX_CONSECUTIVE_LOSSES = 5  # حداکثر ۳ ضرر متوالی در یک روز
+MAX_CONSECUTIVE_LOSSES = 3  # حداکثر ۳ ضرر متوالی در یک روز
 
 BASE_URL = "https://apiv2.thetruetrade.io"
 FUTURES_PREFIX = "/futures"
