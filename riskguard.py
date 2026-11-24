@@ -1,10 +1,9 @@
 """
-RiskGuard — ربات مدیریت ریسک (نسخه پیشرفته + حد ضرر فاجعه‌بار + قانون ۳ ضرر متوالی)
+RiskGuard — ربات مدیریت ریسک (نسخه پیشرفته + حد ضرر فاجعه‌بار)
 - تنظیمات اختصاصی شما (ریوارد ۶، قفل سود ۳)
 - خواندن هوشمندانه PnL
 - دقت ۸ رقم اعشار برای ارزهای ارزان
 - بستن اضطراری در صورت ضرر ۱.۵ برابری
-- 🚨 قانون جدید: توقف کامل پس از ۳ ضرر متوالی در یک روز
 """
 
 import os
@@ -15,7 +14,6 @@ import hmac
 import hashlib
 import urllib.request
 import urllib.error
-from datetime import datetime, timezone
 
 # خواندن کلیدها از Secrets گیت‌هاب (امن)
 API_KEY = os.environ.get("TT_API_KEY")
@@ -29,7 +27,7 @@ if not API_KEY or not API_SECRET:
 # تنظیمات ثابت ربات (مطابق کد خودت)
 # ==========================================
 MAX_LOSS_USD = 1.0          
-REWARD_RATIO = 100.0          
+REWARD_RATIO = 9.0          
 TRIGGER_RATIO = 4.0         
 LOCK_PROFIT_RATIO = 1.0     
 CATASTROPHIC_MULTIPLIER = 1.5 
@@ -37,9 +35,6 @@ MAX_RUN_TIME_SECONDS = 340 * 60
 CHECK_INTERVAL_SECONDS = 30                 
 ONLY_ONE_TRADE = True
 LOCK_STOP_LOSS = True
-
-# 🚨 قانون جدید
-MAX_CONSECUTIVE_LOSSES = 3  # حداکثر ۳ ضرر متوالی در یک روز
 
 BASE_URL = "https://apiv2.thetruetrade.io"
 FUTURES_PREFIX = "/futures"
@@ -88,47 +83,7 @@ def save_state(state):
         with open(STATE_FILE, "w") as f: json.dump(state, f, indent=2)
     except Exception as e: print(f"خطا در ذخیره state: {e}")
 
-# 🚨 تابع جدید برای بررسی ۳ ضرر متوالی امروز
-def check_consecutive_losses():
-    today = datetime.now(timezone.utc).date()
-    response = request("GET", f"{FUTURES_PREFIX}/positions")
-    if not response: return False
-        
-    items = response.get("items", []) if isinstance(response, dict) else response
-    # فیلتر معاملات بسته شده
-    closed = [p for p in items if p.get("status") == "CLOSED"]
-    
-    # مرتب‌سازی از جدید به قدیم
-    closed.sort(key=lambda x: x.get("updatedAt", x.get("createdAt", "")), reverse=True)
-    
-    consecutive_losses = 0
-    for p in closed:
-        closed_at = p.get("updatedAt", "")
-        if not closed_at: break
-        try:
-            dt = datetime.fromisoformat(closed_at.replace("Z", "+00:00"))
-            # اگر معامله مربوط به امروز نبود، زنجیره شکسته میشه
-            if dt.date() != today:
-                break
-                
-            pnl = float(p.get("realizedPnL", 0) or p.get("totalPnL", 0) or 0)
-            if pnl < 0:
-                consecutive_losses += 1
-            else:
-                # اگر به یه معامله سودده برسیم، زنجیره شکسته میشه
-                break
-        except:
-            pass
-            
-    if consecutive_losses >= MAX_CONSECUTIVE_LOSSES:
-        print(f"🚨 هشدار: {consecutive_losses} ضرر متوالی در امروز شناسایی شد. تا فردا معامله ممنوع است!")
-        return True
-    return False
-
 def run_riskguard_cycle(state):
-    # 🚨 چک کردن قانون ۳ ضرر متوالی
-    is_trading_halted = check_consecutive_losses()
-    
     response = request("GET", f"{FUTURES_PREFIX}/positions")
     if response is None: return
 
@@ -136,13 +91,6 @@ def run_riskguard_cycle(state):
     open_positions = [p for p in positions if isinstance(p, dict) and p.get("status") == "OPENED" and p.get("isActive")]
 
     if not open_positions: return
-
-    # اگر قانون نقض شده بود، هر معامله بازی رو ببند
-    if is_trading_halted:
-        for p in open_positions:
-            print(f"🚨 بستن اجباری معامله {p['symbol']} به دلیل قانون ۳ ضرر متوالی.")
-            request("POST", f"{FUTURES_PREFIX}/positions/{p['id']}/close", {"orderType": "MARKET"})
-        return # خروج از چرخه
 
     if ONLY_ONE_TRADE and len(open_positions) > 1:
         open_positions.sort(key=lambda p: (p.get("createdAt", ""), p.get("id")))
